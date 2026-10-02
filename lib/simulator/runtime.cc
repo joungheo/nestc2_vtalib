@@ -1493,6 +1493,14 @@ void* VTABufferGetVirtAddr(const void* buffer) {
   return from_buffer->virt_addr();
 }
 
+//#### JO added: explicit cache maintenance API (mirrors lib/zcu102/api.cc)
+void VTABufferFlush(void* buffer, size_t offset, size_t size) {
+  vta::DataBuffer::FromHandle(buffer)->FlushCache(offset, size);
+}
+
+void VTABufferInvalidate(void* buffer, size_t offset, size_t size) {
+  vta::DataBuffer::FromHandle(buffer)->InvalidateCache(offset, size);
+}
 
 VTACommandHandle VTATLSCommandHandle(uint32_t index) {
   return vta::CommandQueue::ThreadLocal(index).get();

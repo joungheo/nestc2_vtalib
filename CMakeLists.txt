@@ -6,6 +6,10 @@ option(NESTC_EVTA_RUN_ON_ZCU102 "Run on ZCU102 board" OFF)
 option(NESTC_EVTA_LIB_VALIDATION "Validate EVTA library while running" OFF)
 option(NESTC_EVTA_DEBUG "Debug mode for EVTA library" OFF)
 option(NESTC_EVTA_PROFILE "Profile mode for EVTA HW" OFF)
+#### JO added: the ZCU102 EVTA bitstream zcu102_1x16_i8w8a32_16_16_19_18 on our board is not
+#### cache-coherent (coherent=true hangs), so the runtime must flush/invalidate CPU caches.
+#### Turn ON only for a design whose EVTA DMA is coherent with the CPU (HPC ports + CCI snoop).
+option(NESTC_EVTA_COHERENT_ACCESSES "EVTA DMA is cache-coherent with the CPU (ZCU102 only)" OFF)
 INCLUDE_DIRECTORIES(include 3rdparty/dlpack/include)
 INCLUDE_DIRECTORIES(include 3rdparty/dmlc-core/include)
 option(VTALIB_WITHOUT_NESTC "use VTALIB_ONLY running without nest-c" OFF)
@@ -71,8 +75,15 @@ else()
             -DVTA_COMPUTE_UOP_ADDR_OFFSET=32
             -DVTA_COMPUTE_BIAS_ADDR_OFFSET=40
             -DVTA_STORE_OUT_ADDR_OFFSET=16
-            -DVTA_COHERENT_ACCESSES=true
+            #### JO changed: coherence now selected by NESTC_EVTA_COHERENT_ACCESSES (default OFF)
+            #-DVTA_COHERENT_ACCESSES=true
             -Dvta_EXPORTS)
+    #### JO added
+    if(NESTC_EVTA_COHERENT_ACCESSES)
+        add_definitions(-DVTA_COHERENT_ACCESSES=true)
+    else()
+        add_definitions(-DVTA_COHERENT_ACCESSES=false)
+    endif()
     if(NESTC_EVTA_MULTI)
     add_definitions(-DVTA_LOG_INP_BUFF_SIZE=15
             -DVTA_LOG_WGT_BUFF_SIZE=18
@@ -141,8 +152,15 @@ else()
     message("profile disabled")
     add_definitions(-DPROFILE_ENABLE=0)
 endif()
+
+#### delete LLVMSupport when ZCU102=ON
 target_link_libraries(VTABundle PUBLIC
         vta_runtime LLVMSupport pthread glog gflags gomp)
+#if(NESTC_EVTA_RUN_ON_ZCU102)
+#    target_link_libraries(VTABundle PUBLIC vta_runtime pthread glog gflags gomp)
+#else()
+#    target_link_libraries(VTABundle PUBLIC vta_runtime LLVMSupport pthread glog gflags gomp)
+#endif()
 
 if(NOT NESTC_USE_VTASIM)
     message("not vtasim. linking cma library")

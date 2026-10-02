@@ -340,8 +340,12 @@ class Device {
 
   void RunStore(const VTAMemInsn* op) {
     if (op->x_size == 0) return;
+    //#### JO changed to make instruction width = 256bit
+    //if (op->memory_type == VTA_MEM_ID_ACC ||
+    //    op->memory_type == VTA_MEM_ID_UOP) {
     if (op->memory_type == VTA_MEM_ID_ACC ||
-        op->memory_type == VTA_MEM_ID_UOP) {
+        op->memory_type == VTA_MEM_ID_UOP ||
+        op->memory_type == VTA_MEM_ID_OUT) {
       prof_->out_store_nbytes += (
           op->x_size * op->y_size * VTA_BATCH * VTA_BLOCK_OUT * VTA_OUT_WIDTH / 8);
       if (!prof_->SkipExec()) {

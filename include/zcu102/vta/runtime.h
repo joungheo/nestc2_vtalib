@@ -73,6 +73,23 @@ TVM_DLL void VTABufferCopy(const void* from,
                            int kind_mask);
 TVM_DLL void* VTABufferGetVirtAddr(const void* buffer);
 
+//#### JO added: explicit cache maintenance for code that accesses a buffer through
+//#### VTABufferGetVirtAddr() instead of VTABufferCopy() (needed when the EVTA is not
+//#### cache-coherent, i.e. VTA_COHERENT_ACCESSES=false). No-op for coherent builds.
+/*!
+ * \brief Write back CPU cache lines of a data buffer so the accelerator sees CPU writes.
+ * \param buffer The data buffer (from VTABufferAlloc).
+ * \param offset Byte offset into the buffer.
+ * \param size Number of bytes.
+ */
+TVM_DLL void VTABufferFlush(void* buffer, size_t offset, size_t size);
+/*!
+ * \brief Invalidate CPU cache lines of a data buffer so the CPU sees accelerator writes.
+ * \param buffer The data buffer (from VTABufferAlloc).
+ * \param offset Byte offset into the buffer.
+ * \param size Number of bytes.
+ */
+TVM_DLL void VTABufferInvalidate(void* buffer, size_t offset, size_t size);
 /*! \brief VTA command handle */
 typedef void* VTACommandHandle;
 

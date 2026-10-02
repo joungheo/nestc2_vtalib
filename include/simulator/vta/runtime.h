@@ -71,6 +71,16 @@ TVM_DLL void VTABufferCopy(const void* from,
                            size_t size,
                            int kind_mask);
 TVM_DLL void* VTABufferGetVirtAddr(const void* buffer);
+//#### JO added: explicit cache maintenance API (same as include/zcu102/vta/runtime.h).
+//#### Effectively a no-op in the simulator; present so generated bundles build for both.
+/*!
+ * \brief Write back CPU cache lines of a data buffer so the accelerator sees CPU writes.
+ */
+TVM_DLL void VTABufferFlush(void* buffer, size_t offset, size_t size);
+/*!
+ * \brief Invalidate CPU cache lines of a data buffer so the CPU sees accelerator writes.
+ */
+TVM_DLL void VTABufferInvalidate(void* buffer, size_t offset, size_t size);
 /*! \brief VTA command handle */
 typedef void* VTACommandHandle;
 

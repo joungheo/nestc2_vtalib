@@ -34,12 +34,18 @@ extern "C" {
 /*! Memory bus width */
 #define VTA_BUS_WIDTH (1 << VTA_LOG_BUS_WIDTH)
 
+//#### JO change to ZCU102 spec, JO, 260908
 /*! log2 of instruction data type width */
-#define VTA_LOG_INS_WIDTH 7   // 7->8 changed for evta
+//#define VTA_LOG_INS_WIDTH 7   // 7->8 changed for evta
+#define VTA_LOG_INS_WIDTH 8   // 7->8 changed for evta
 /*! Instruction data type width */
 #define VTA_INS_WIDTH (1 << VTA_LOG_INS_WIDTH)
+
+//#### JO change to ZCU102 spec, JO, 260908
 /*! log2 of micro op data type width */
-#define VTA_LOG_UOP_WIDTH 5   // 5->6 changed for evta
+//#define VTA_LOG_UOP_WIDTH 5   // 5->6 changed for evta
+#define VTA_LOG_UOP_WIDTH 6   // 5->6 changed for evta
+
 /*! Micro Op data type width */
 #define VTA_UOP_WIDTH (1 << VTA_LOG_UOP_WIDTH)
 /*! Weight data type width */
@@ -122,7 +128,9 @@ extern "C" {
 #define VTA_OPCODE_BIT_WIDTH 3
 /*! ALU opcode field bitwidth */
 //#define VTA_ALU_OPCODE_BIT_WIDTH 2  // 2->3 hanged for evta
-#define VTA_ALU_OPCODE_BIT_WIDTH 3  // 2->3 hanged for evta
+//#### JO changed to match EVTA bitstream zcu102_1x16_i8w8a32_16_16_19_18 (alu opcode 2bit)
+//#define VTA_ALU_OPCODE_BIT_WIDTH 3  // 2->3 hanged for evta
+#define VTA_ALU_OPCODE_BIT_WIDTH 2
 
 /*! Opcode: load encoding */
 #define VTA_OPCODE_LOAD 0
@@ -149,7 +157,11 @@ extern "C" {
 #define VTA_ALU_OPCODE_MUL 4
 
 /*! Memory type field bitwidth */
-#define VTA_MEMOP_ID_BIT_WIDTH 2    // 2->3 changed for evta
+//#### JO change to 3 
+//#define VTA_MEMOP_ID_BIT_WIDTH 2    // 2->3 changed for evta
+//#### JO changed to match EVTA bitstream zcu102_1x16_i8w8a32_16_16_19_18 (memop id 2bit)
+//#define VTA_MEMOP_ID_BIT_WIDTH 3    // 2->3 changed for evta
+#define VTA_MEMOP_ID_BIT_WIDTH 2
 /*! Load/Store Instruction: DRAM address width*/
 #define VTA_MEMOP_SRAM_ADDR_BIT_WIDTH 16
 /*! Load/Store Instruction: DRAM address width*/
@@ -223,8 +235,11 @@ typedef struct {
   uint64_t pad_0          : 64 - VTA_OPCODE_BIT_WIDTH - 4;
   /*! \brief Padding */
   uint64_t pad_1          : 64;
+  //#### JO changed to make instruction width = 256bit
   //uint64_t pad_2          : 64;
-  //uint64_t pad_3          : 64;  
+  //uint64_t pad_3          : 64;
+  uint64_t pad_2          : 64;
+  uint64_t pad_3          : 64;
 } VTAGenericInsn;
 
 /*! \brief VTA load/store instruction
@@ -267,8 +282,11 @@ typedef struct {
   uint64_t x_pad_0        : VTA_MEMOP_PAD_BIT_WIDTH;
   /*! \brief 2D access pattern: end padding along x dimension */
   uint64_t x_pad_1        : VTA_MEMOP_PAD_BIT_WIDTH;
+  //#### JO changed to make instruction width = 256bit
   //uint64_t pad_0          : 32;
-  //uint64_t pad_1          : 64;  
+  //uint64_t pad_1          : 64;
+  uint64_t pad_0          : 32;
+  uint64_t pad_1          : 64;
 } VTAMemInsn;
 
 /*! \brief VTA GEMM instruction
@@ -332,8 +350,11 @@ typedef struct {
   /*! \brief Inner loop weight memory index factor */
   uint64_t wgt_factor_in  : VTA_LOG_WGT_BUFF_DEPTH;
   //uint64_t gemm_from_output : 1;
+  //#### JO changed to make instruction width = 256bit
   //uint64_t pad_0          : 32;
-  //uint64_t pad_1          : 64;  
+  //uint64_t pad_1          : 64;
+  uint64_t pad_0          : 32;
+  uint64_t pad_1          : 64;
 } VTAGemInsn;
 
 /* XP_GEMM instruction*/
@@ -436,8 +457,11 @@ typedef struct {
   uint64_t use_imm        : 1;
   /*! \brief Immediate value: allow negative value */
   int64_t imm            : VTA_ALUOP_IMM_BIT_WIDTH;
+  //#### JO changed to make instruction width = 256bit
   //uint64_t pad_0          : 32;
-  //uint64_t pad_1          : 64;  
+  //uint64_t pad_1          : 64;
+  uint64_t pad_0          : 32;
+  uint64_t pad_1          : 64;
 } VTAAluInsn;
 
 /*! \brief VTA ALU instruction converter */
@@ -454,15 +478,26 @@ union VTAInsn {
   VTAAluInsn alu;
 };
 
+//#### JO change to uint64_t
 /*! \brief VTA micro-op for GEMM/ALU instruction */
+//typedef struct {
+  /*! \brief Destination index (indexes accum buffer) */
+  //uint32_t dst_idx    : VTA_LOG_ACC_BUFF_DEPTH;     // change uint32_t-> uint64_t for evta
+  /*! \brief Source index (indexes input buffer for GEMM or accum buffer for ALU) */
+  //uint32_t src_idx    : VTA_LOG_INP_BUFF_DEPTH;
+  /*! \brief Weight index (indexes weight buffer) */
+  //uint32_t wgt_idx    : VTA_LOG_WGT_BUFF_DEPTH;
+//} VTAUop;
+
 typedef struct {
   /*! \brief Destination index (indexes accum buffer) */
-  uint32_t dst_idx    : VTA_LOG_ACC_BUFF_DEPTH;     // change uint32_t-> uint64_t for evta
+  uint64_t dst_idx    : VTA_LOG_ACC_BUFF_DEPTH;     // change uint32_t-> uint64_t for evta
   /*! \brief Source index (indexes input buffer for GEMM or accum buffer for ALU) */
-  uint32_t src_idx    : VTA_LOG_INP_BUFF_DEPTH;
+  uint64_t src_idx    : VTA_LOG_INP_BUFF_DEPTH;
   /*! \brief Weight index (indexes weight buffer) */
-  uint32_t wgt_idx    : VTA_LOG_WGT_BUFF_DEPTH;
+  uint64_t wgt_idx    : VTA_LOG_WGT_BUFF_DEPTH;
 } VTAUop;
+
 
 #ifdef __cplusplus
 }

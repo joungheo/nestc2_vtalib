@@ -3016,3 +3016,9 @@ int xp_convolution_wo_tr_scale(int8_t* input, int8_t *kernel, int32_t *bias, int
 
   return 0;
 }
+
+// #### add 260907, JO
+// #### add __attribute__((weak)) to avoid the collision with the strong LLVMSupport when using VTASIM, 260908, JO  
+//namespace llvm {
+//    __attribute__((weak)) int DisableABIBreakingChecks = 0;
+//}

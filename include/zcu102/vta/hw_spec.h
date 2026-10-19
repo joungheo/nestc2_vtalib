@@ -125,7 +125,10 @@ extern "C" {
 /*! ALU opcode field bitwidth */
 //#### JO changed to match EVTA bitstream zcu102_1x16_i8w8a32_16_16_19_18 (alu opcode 2bit)
 //#define VTA_ALU_OPCODE_BIT_WIDTH 3
+//#### JO changed: overridable per bitstream (-DVTA_ALU_OPCODE_BIT_WIDTH=3); default 2 = zcu102_1x16_*_16_16_19_18
+#ifndef VTA_ALU_OPCODE_BIT_WIDTH
 #define VTA_ALU_OPCODE_BIT_WIDTH 2
+#endif
 
 /*! Opcode: load encoding */
 #define VTA_OPCODE_LOAD 0
@@ -155,7 +158,10 @@ extern "C" {
 /*! Memory type field bitwidth */
 //#### JO changed to match EVTA bitstream zcu102_1x16_i8w8a32_16_16_19_18 (memop id 2bit)
 //#define VTA_MEMOP_ID_BIT_WIDTH 3
+//#### JO changed: overridable per bitstream (-DVTA_MEMOP_ID_BIT_WIDTH=3); default 2 = zcu102_1x16_*_16_16_19_18
+#ifndef VTA_MEMOP_ID_BIT_WIDTH
 #define VTA_MEMOP_ID_BIT_WIDTH 2
+#endif
 /*! Load/Store Instruction: DRAM address width*/
 #define VTA_MEMOP_SRAM_ADDR_BIT_WIDTH 16
 /*! Load/Store Instruction: DRAM address width*/

@@ -90,6 +90,7 @@ TVM_DLL void VTABufferFlush(void* buffer, size_t offset, size_t size);
  * \param size Number of bytes.
  */
 TVM_DLL void VTABufferInvalidate(void* buffer, size_t offset, size_t size);
+
 /*! \brief VTA command handle */
 typedef void* VTACommandHandle;
 

@@ -1502,6 +1502,7 @@ void VTABufferInvalidate(void* buffer, size_t offset, size_t size) {
   vta::DataBuffer::FromHandle(buffer)->InvalidateCache(offset, size);
 }
 
+
 VTACommandHandle VTATLSCommandHandle(uint32_t index) {
   return vta::CommandQueue::ThreadLocal(index).get();
 }

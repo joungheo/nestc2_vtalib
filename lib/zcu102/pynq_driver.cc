@@ -140,6 +140,14 @@ static int log_count = 0;
 
 //#define PROFILE_ENABLE 0
 
+//#### JO added: the zcu102_1x16_i8w8a32_16_16_19_18 bitstream has no AXI perf monitor at
+//#### AXI_PERF_MONITOR (reading it -> SIGBUS), so PROFILE_ENABLE alone records only timing and
+//#### the compute-module counters. Build with -DPROFILE_AXI_MONITOR=1 for a design that has one.
+#ifndef PROFILE_AXI_MONITOR
+#define PROFILE_AXI_MONITOR 0
+#endif
+#define PROFILE_MAX_EVENTS 1024
+
 // device handle
 static VTADeviceHandle createdVTADeviceHandle[VTA_DEVICE_NUM] = {};
 
@@ -202,7 +210,9 @@ class VTADevice {
     vta_load_handle_ = VTAMapRegister(load_addr);
     vta_compute_handle_ = VTAMapRegister(compute_addr);
     vta_store_handle_ = VTAMapRegister(store_addr);
-    if(PROFILE_ENABLE) {
+    //#### JO changed: map the AXI perf monitor only when the design has one
+    //if(PROFILE_ENABLE) {
+    if(PROFILE_ENABLE && PROFILE_AXI_MONITOR) {
       vta_axiperfmonitor_handle_ = VTAMapRegister(AXI_PERF_MONITOR);
     }
 
@@ -223,7 +233,11 @@ class VTADevice {
     VTAUnmapRegister(vta_load_handle_);
     VTAUnmapRegister(vta_compute_handle_);
     VTAUnmapRegister(vta_store_handle_);
-    if (PROFILE_ENABLE) {
+    //#### JO changed: nothing recorded -> event_buffer_[-1] below; also report dropped events
+    //if (PROFILE_ENABLE) {
+    if (PROFILE_ENABLE && current_event_index_ > 0) {
+      if (dropped_events_)
+        printf("[profile] VTA%u: event buffer full, %u later events not recorded\n", vta_index_, dropped_events_);
       PrintProfilingInfo();
 
       double total_time = 0.0;
@@ -310,7 +324,13 @@ class VTADevice {
 
 
 
-    if (PROFILE_ENABLE) {
+    //#### JO changed: event_buffer_ has PROFILE_MAX_EVENTS entries and was written without a bound check
+    //if (PROFILE_ENABLE) {
+    if (PROFILE_ENABLE && current_event_index_ >= PROFILE_MAX_EVENTS) {
+      dropped_events_++;
+    } else if (PROFILE_ENABLE) {
+      //#### JO added: AXI perf monitor reads only when the design has one (else they read as 0)
+#if PROFILE_AXI_MONITOR
       unsigned slot0_wr_bytes = VTAReadMappedReg(vta_axiperfmonitor_handle_, SLOT0_OFFSET + WRITE_BYTE_COUNT);
       unsigned slot0_wr_transactions = VTAReadMappedReg(vta_axiperfmonitor_handle_, SLOT0_OFFSET + WRITE_TRANSACTION_COUNT);
       unsigned slot0_wr_latency = VTAReadMappedReg(vta_axiperfmonitor_handle_, SLOT0_OFFSET + WRITE_LATENCY_COUNT);
@@ -334,6 +354,11 @@ class VTADevice {
       unsigned slot2_rd_bytes = VTAReadMappedReg(vta_axiperfmonitor_handle_, SLOT2_OFFSET + READ_BYTE_COUNT);
       unsigned slot2_rd_transactions = VTAReadMappedReg(vta_axiperfmonitor_handle_, SLOT2_OFFSET + READ_TRANSACTION_COUNT);
       unsigned slot2_rd_latency = VTAReadMappedReg(vta_axiperfmonitor_handle_, SLOT2_OFFSET + READ_LATENCY_COUNT);
+#else
+      unsigned slot0_wr_bytes = 0, slot0_rd_bytes = 0;
+      unsigned slot1_rd_bytes = 0, slot1_rd_transactions = 0, slot1_rd_latency = 0;
+      unsigned slot2_wr_bytes = 0, slot2_wr_transactions = 0, slot2_wr_latency = 0;
+#endif
 
       unsigned load_count = VTAReadMappedReg(vta_compute_handle_, COMPUTE_LOAD_COUNT_OFFSET);
       unsigned gemm_count = VTAReadMappedReg(vta_compute_handle_, COMPUTE_GEMM_COUNT_OFFSET);
@@ -383,8 +408,12 @@ class VTADevice {
   void* vta_store_handle_{nullptr};
   void* vta_axiperfmonitor_handle_{nullptr};
 
-  struct ProfileEvent event_buffer_[1024];
+  //#### JO changed: size named so Run() can bound-check it
+  //struct ProfileEvent event_buffer_[1024];
+  struct ProfileEvent event_buffer_[PROFILE_MAX_EVENTS];
   uint32_t current_event_index_;
+  //#### JO added
+  uint32_t dropped_events_{0};
   uint32_t vta_index_;
 };
 

@@ -3338,6 +3338,67 @@ static void fc_evta_probe(uint32_t IN, uint32_t OUT, VTACommandHandle cmdh, uint
   VTABufferFree(b.out);
 }
 
+// random weights (nz nonzeros per output in -4..4, or dense in -128..127 with nz = 0), inputs in -128..127, bias in
+// -bmax..bmax, shift: EVTA vs the exact model (round half away from zero, clip)
+static void fc_evta_probe2(uint32_t IN, uint32_t OUT, int nz, int bmax, int shift, VTACommandHandle cmdh,
+                           uint32_t idEVTA) {
+  const uint32_t CIN = IN / 16, NB = (OUT + 15) / 16, g = std::min<uint32_t>(NB, 512 / CIN);
+  const uint32_t nChunks = (NB + g - 1) / g, gEven = (NB + nChunks - 1) / nChunks;
+  FcEvtaBuffers b;
+  b.wgt = VTABufferAlloc((size_t)NB * CIN * 256);
+  b.bias = VTABufferAlloc((size_t)NB * 64);
+  b.in = VTABufferAlloc(IN);
+  b.out = VTABufferAlloc((size_t)NB * 16);
+  int8_t *w = (int8_t *)VTABufferGetVirtAddr(b.wgt), *x = (int8_t *)VTABufferGetVirtAddr(b.in);
+  int32_t *bb = (int32_t *)VTABufferGetVirtAddr(b.bias);
+  memset(w, 0, (size_t)NB * CIN * 256);
+  memset(bb, 0, (size_t)NB * 64);
+  uint32_t r = 12345;
+  auto rnd = [&]() { r = r * 1103515245u + 12345u; return (r >> 8) & 0xffff; };
+  std::vector<int8_t> W((size_t)IN * OUT, 0);
+  for (uint32_t k = 0; k < IN; k++)
+    x[k] = (int8_t)(rnd() % 256 - 128);
+  for (uint32_t j = 0; j < OUT; j++) {
+    if (nz)
+      for (int t = 0; t < nz; t++)
+        W[(size_t)(rnd() % IN) * OUT + j] = (int8_t)(rnd() % 9 - 4);
+    else
+      for (uint32_t k = 0; k < IN; k++)
+        W[(size_t)k * OUT + j] = (int8_t)(rnd() % 256 - 128);
+    if (bmax)
+      bb[j] = (int32_t)(rnd() % (2 * bmax + 1)) - bmax;
+  }
+  for (uint32_t k = 0; k < IN; k++)
+    for (uint32_t j = 0; j < OUT; j++)
+      w[((size_t)(j / 16) * CIN + k / 16) * 256 + (j % 16) * 16 + k % 16] = W[(size_t)k * OUT + j];
+  VTABufferFlush(b.wgt, 0, (size_t)NB * CIN * 256);
+  VTABufferFlush(b.bias, 0, (size_t)NB * 64);
+  VTABufferFlush(b.in, 0, IN);
+  fc_evta_core(b, CIN, NB, gEven, nChunks, shift, cmdh, idEVTA);
+  VTABufferInvalidate(b.out, 0, (size_t)NB * 16);
+  const int8_t *o = (const int8_t *)VTABufferGetVirtAddr(b.out);
+  uint32_t ok = 0, okFloor = 0, okNoRnd = 0;
+  int shown = 0;
+  for (uint32_t j = 0; j < OUT; j++) {
+    int64_t acc = bb[j];
+    for (uint32_t k = 0; k < IN; k++)
+      acc += (int64_t)x[k] * W[(size_t)k * OUT + j];
+    auto clip = [](int64_t v) { return (int)std::max<int64_t>(-128, std::min<int64_t>(127, v)); };
+    int want = clip((int64_t)std::round(double(acc) / (1 << shift)));
+    ok += o[j] == want;
+    okFloor += o[j] == clip(acc >> shift);
+    okNoRnd += o[j] == clip(acc);
+    if (o[j] != want && shown++ < 6)
+      printf("  out %u: evta %d, want %d (acc %lld)\n", j, o[j], want, (long long)acc);
+  }
+  printf("EVTA_FC_PROBE2 %u -> %u nz %d bias %d shift %d: %u of %u right (floor %u, no shift %u)\n", IN, OUT, nz, bmax,
+         shift, ok, OUT, okFloor, okNoRnd);
+  VTABufferFree(b.wgt);
+  VTABufferFree(b.bias);
+  VTABufferFree(b.in);
+  VTABufferFree(b.out);
+}
+
 int fullyconnected_evta(int8_t *input, float inputScale, int32_t inputOffset, int8_t *kernel, float kernelScale,
                         int32_t kernelOffset, int8_t *bias, float biasScale, int32_t biasOffset, int8_t *output,
                         float outputScale, int32_t outputOffset, dim_t inputDim0, dim_t inputDim1, dim_t kernelDim0,
@@ -3371,6 +3432,13 @@ int fullyconnected_evta(int8_t *input, float inputScale, int32_t inputOffset, in
       probed = true;
       fc_evta_probe(128, 256, (VTACommandHandle)vtaCmdH, idEVTA);
       fc_evta_probe(IN, OUT, (VTACommandHandle)vtaCmdH, idEVTA);
+      for (int nz : {1, 4})
+        for (int bmax : {0, 50})
+          fc_evta_probe2(IN, OUT, nz, bmax, 0, (VTACommandHandle)vtaCmdH, idEVTA);
+      for (int bmax : {0, 3000})
+        for (int sh : {0, 8})
+          fc_evta_probe2(IN, OUT, 0, bmax, sh, (VTACommandHandle)vtaCmdH, idEVTA);
+      fc_evta_probe2(IN, OUT, 4, 0, 1, (VTACommandHandle)vtaCmdH, idEVTA);
     }
   }
   // the buffers of this kernel (one set per call site and EVTA copy), made on the first call

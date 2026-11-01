@@ -3350,6 +3350,37 @@ int fullyconnected_evta(int8_t *input, float inputScale, int32_t inputOffset, in
   VTABufferInvalidate(b.out, 0, (size_t)NB * 16);
   memcpy(output, VTABufferGetVirtAddr(b.out), OUT);
 
+  //#### EVTA_FC_DEBUG=1: which of a few wrong models the EVTA output matches (bring-up)
+  const char *dbg = getenv("EVTA_FC_DEBUG");
+  if (dbg && atoi(dbg) > 0) {
+    const int32_t *bb = (const int32_t *)VTABufferGetVirtAddr(b.bias);
+    auto rq = [&](int64_t x, bool rnd) {
+      int64_t r = rnd ? (int64_t)std::round(double(x) / (1 << shift)) : (x >> shift);
+      return (int)std::max<int64_t>(-128, std::min<int64_t>(127, r));
+    };
+    const char *names[] = {"right", "wgt block transposed", "no bias", "first input block only",
+                           "floor instead of round", "last input block only", "inputs k%16 only of block 0"};
+    for (int h = 0; h < 7; h++) {
+      uint32_t ok = 0;
+      for (uint32_t j = 0; j < OUT; j++) {
+        int64_t acc = h == 2 ? 0 : bb[j];
+        for (uint32_t k = 0; k < IN; k++) {
+          if (h == 3 && k >= 16) break;
+          if (h == 5 && k < IN - 16) continue;
+          if (h == 6 && k >= 16) break;
+          uint32_t kk = k, jj = j;
+          if (h == 1) { kk = k / 16 * 16 + j % 16; jj = j / 16 * 16 + k % 16; }
+          if (jj >= OUT) continue;
+          acc += (int64_t)input[k] * kernel[(size_t)kk * OUT + jj];
+        }
+        ok += rq(acc, h != 4) == output[j];
+      }
+      printf("EVTA_FC_DEBUG %-28s: %u of %u match\n", names[h], ok, OUT);
+    }
+    printf("EVTA_FC_DEBUG out[0..7]:");
+    for (int j = 0; j < 8; j++) printf(" %d", output[j]);
+    printf("\n");
+  }
   //#### EVTA_RES_CHECK=1: compare with the CPU fullyconnected
   const char *e = getenv("EVTA_RES_CHECK");
   if (e && atoi(e) > 0) {

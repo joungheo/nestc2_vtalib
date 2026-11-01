@@ -3214,9 +3214,10 @@ int maxpool_evta(int8_t *input, int8_t *output, int N, int H, int W, int C, int 
 //#### buffer, then: bias -> acc[o]; per chunk of g output blocks (one half of the wgt buffer) LOAD the weights in one
 //#### contiguous transfer (the other half is loaded while this one is in the GEMM) and GEMM acc[o] += inp[c] x wgt[o][c]
 //#### (loop over c, one uop per o: the same acc entry comes back every g uops); then round half away from zero with the
-//#### ALU only (MIN / MAX / ADD / SHR): s = acc >> 31 (-1 if negative), acc = (acc + s + 2^(shift-1)) >> shift, clip;
+//#### ALU only (MIN / MAX / ADD / SHR): s = max(min(acc, 0), -1) (-1 if negative), acc = (acc + s + 2^(shift-1)) >> shift,
+//#### clip;
 //#### STORE, copy the OUT bytes out. Not on the EVTA (falls back to the CPU fullyconnected): offsets, a scale ratio that
-//#### is not 2^-shift (0..16), batch > 1, IN not a multiple of 16, chunks under 8 output blocks.
+//#### is not 2^-shift (0..15), batch > 1, IN not a multiple of 16, chunks under 8 output blocks.
 struct FcGemmContext {
   uint32_t acc_, wgt_, g_, cin_;
   bool operator==(FcGemmContext &op) { return acc_ == op.acc_ && wgt_ == op.wgt_ && g_ == op.g_ && cin_ == op.cin_; }
@@ -3279,7 +3280,9 @@ static void fc_evta_core(const FcEvtaBuffers &b, uint32_t CIN, uint32_t NB, uint
   if (shift > 0) {
     pushReset(cmdh, idEVTA, NB, NB);
     pushAlu(cmdh, idEVTA, NB, 0, NB, RES_ALU_ADD, 0, 0);
-    pushAlu(cmdh, idEVTA, NB, NB, NB, RES_ALU_SHR, 1, 31);
+    //#### not SHR 31: the ALU shift is a 5-bit signed field (-16..15), 31 is a shift left by 1
+    pushAlu(cmdh, idEVTA, NB, NB, NB, RES_ALU_MIN, 1, 0);
+    pushAlu(cmdh, idEVTA, NB, NB, NB, RES_ALU_MAX, 1, -1);
     pushAlu(cmdh, idEVTA, 0, NB, NB, RES_ALU_ADD, 0, 0);
     pushAlu(cmdh, idEVTA, 0, 0, NB, RES_ALU_ADD, 1, 1 << (shift - 1));
     pushAlu(cmdh, idEVTA, 0, 0, NB, RES_ALU_SHR, 1, shift);
@@ -3408,7 +3411,7 @@ int fullyconnected_evta(int8_t *input, float inputScale, int32_t inputOffset, in
   const uint32_t IN = inputDim1, OUT = outputDim1, CIN = IN / 16, NB = (OUT + 15) / 16;
   const float matMulScale = inputScale * kernelScale, ratio = matMulScale / outputScale;
   int shift = -1;
-  for (int k = 0; k <= 16; k++)
+  for (int k = 0; k <= 15; k++)  // ALU SHR: -16..15
     if (ratio == std::ldexp(1.0f, -k)) shift = k;
   const uint32_t g = CIN ? std::min<uint32_t>(NB, WGT_HALF / CIN) : 0;
   const uint32_t nChunks = g ? (NB + g - 1) / g : 0, gEven = nChunks ? (NB + nChunks - 1) / nChunks : 0;

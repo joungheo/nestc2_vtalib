@@ -340,6 +340,10 @@ void VTAUopBufferReset(VTACommandHandle cmdH);
 //#### generate), 0 = generate it (and VTASynchronize) as usual, then VTAReplayEnd(ok)
 int VTAReplayBegin(VTACommandHandle cmdH, const void* key, int key_bytes, void* const* bufs, int nbufs);
 void VTAReplayEnd(VTACommandHandle cmdH, int ok);
+//#### JO added (2026-11-05): CPU work while a replayed call runs (vtalib-zcu102-systolic cmd_queue.h SetSegmentHook; that
+//#### vtalib's VTABundle.cpp includes this header, the definitions are in its runtime only)
+void VTASetSegmentTag(VTACommandHandle cmdH, int tag);
+void VTASetSegmentHook(VTACommandHandle cmdH, void (*hook)(void *ctx, int tag), void *ctx);
 
 #ifdef __cplusplus
 }

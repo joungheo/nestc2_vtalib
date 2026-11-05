@@ -2818,6 +2818,17 @@ int convolution_wo_tr_wo_ch(int8_t* input, int8_t *kernel, int32_t *bias, int8_t
   return 0;
 }
 
+//#### JO added (2026-11-05): the conv0 input into the VTA buffer buf, flushed (vtalib-zcu102-systolic writes it while
+//#### the conv runs, its VTABundle.cpp InputStream)
+void preprocess_conv0pack_stream(const float *input, void *buf, int N, int H, int W, int C, int nchw, float scale,
+                                 int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO) {
+  const int KH2 = (KH + stride - 1) / stride;
+  const size_t bytes = (size_t)N * CO * ((H + 2 * pad - KH) / stride + KH2) * ((W + 2 * pad - KW) / stride + 1);
+  preprocess_conv0pack(input, (int8_t *)VTABufferGetVirtAddr(buf), N, H, W, C, nchw, scale, offset, lut, KH, KW, stride,
+                       pad, CO);
+  VTABufferFlush(buf, 0, bytes);
+}
+
 //#### JO changed (2026-10-31): body of convolution_wo_tr and convolution_wo_tr_res (res = nullptr: plain conv)
 //#### JO added (2026-11-02): EVTA_DUMP_CONV=<dir> writes the output of every EVTA conv call (the EVTA layout as the
 //#### buffer holds it) to <dir>/conv_<n>.bin, n counting the calls of the process from 0: compares two bundles' layers

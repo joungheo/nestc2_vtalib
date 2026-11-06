@@ -538,6 +538,12 @@ static void pushAlu(VTACommandHandle &cmdh, uint32_t idEVTA, uint32_t base, uint
   VTAPushALUOp(cmdh, h, &alu_generic, &ctx, 0);
 }
 
+//#### JO added (2026-11-06): upper clip of a fused relu, e.g. ReLU6 = Clip(0, 6) -> round(6 / output scale); VTASave sets it
+//#### around a conv with a fused Clip (VTASetActivationClip(hi) ... VTASetActivationClip(127)). conv_kernel adds an ALU MIN,
+//#### the CPU convs (CPUBundle_generic.cpp) clip to it; 127 = a plain relu
+thread_local int gEvtaClipHi = 127;
+void VTASetActivationClip(int hi) { gEvtaClipHi = hi < 127 ? hi : 127; }
+
 // acc[acc + i] += inp[inp + i] x wgt[wgt], i < size
 struct ResGemmContext {
   uint32_t acc_;
@@ -971,6 +977,10 @@ void conv_kernel(uint32_t sizeOutTileH,
         }
         VTAPushALUOp(vtaCmdH, uopHandle_reset, &alu_min, &alu_ctx, 0);
       }
+      //#### JO added (2026-11-06): the relu's upper clip (gEvtaClipHi < 127: ReLU6)
+      if (relu && gEvtaClipHi < 127)
+        pushAlu(vtaCmdH, idEVTA, outputSramBaseAddr, outputSramBaseAddr,
+                resizedOutTileH * resizedOutTileW * nFilterinLoop, RES_ALU_MIN, 1, gEvtaClipHi);
       //#### JO added (2026-10-31): fused elementadd (+ relu) on the requantized conv output (ConvResidual)
       if (res) {
         uint32_t size = resizedOutTileH * resizedOutTileW * nFilterinLoop;
@@ -2915,7 +2925,7 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
                          nVirtualThread, tileHSize, tileWSize, (int32_t)idEVTA, res != nullptr,
                          res ? (int32_t)res->resShl : 0, res ? (int32_t)res->convShl : 0,
                          res ? (int32_t)res->sumShr : 0, res ? (int32_t)res->relu + 2 * (int32_t)res->reluShl : 0, res ? res->buf == output : 0,
-                         pool != nullptr};
+                         pool != nullptr, gEvtaClipHi};   //#### JO: + gEvtaClipHi (2026-11-06)
   //#### JO changed (2026-11-02): a fused max pool writes its output, not the conv's
   void *replayBufs[] = {input, kernel, doBias ? bias : nullptr, pool ? pool->out : (void *)output, res ? res->buf : nullptr};
   void *dumpBuf = pool ? pool->out : (void *)output;

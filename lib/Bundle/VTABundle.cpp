@@ -3197,6 +3197,44 @@ static int convolution_wo_tr_impl(int8_t* input, int8_t *kernel, int32_t *bias, 
 
 
 
+//#### JO added (2026-11-08, docs/evta_runtime_compare.md 7.21): the depthwise conv that vtalib-zcu102-systolic runs on the
+//#### EVTA (diagonal weights per tap, per-channel shift, see there), here on the CPU with the same arithmetic (same output):
+//#### out = clip((bias + sum) >> shift, lo, hi); input / output VTA buffers in the EVTA layout, kernel KH x KW wgt
+//#### entries (16 x 16) per 16-channel block with w on the diagonal. The HLS GEMM's conv_kernel has no depthwise mode.
+int dw_convolution_evta(int8_t *input, void *kernel, void *bias, void *shift, int8_t *output, int N, int H, int W, int C,
+                        int KH, int KW, int pad, int stride, int out_h, int out_w, int lo, int hi, void *vtaCmdH,
+                        int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
+  if (N != 1 || C % 16) {
+    printf("dw_convolution_evta: unsupported shape N %d C %d\n", N, C);
+    return -1;
+  }
+  const size_t ni = (size_t)C * H * W, no = (size_t)C * out_h * out_w, KK = KH * KW;
+  VTABufferInvalidate(input, 0, ni);
+  const int8_t *in = (const int8_t *)VTABufferGetVirtAddr(input);
+  int8_t *o = (int8_t *)VTABufferGetVirtAddr(output);
+  const int8_t *k = (const int8_t *)VTABufferGetVirtAddr(kernel);
+  const int32_t *b = (const int32_t *)VTABufferGetVirtAddr(bias), *sh = (const int32_t *)VTABufferGetVirtAddr(shift);
+#pragma omp parallel for collapse(2) schedule(static)
+  for (int cb = 0; cb < C / 16; cb++)
+    for (int y = 0; y < out_h; y++)
+      for (int x = 0; x < out_w; x++)
+        for (int l = 0; l < 16; l++) {
+          const int c = cb * 16 + l;
+          int32_t acc = b[c];
+          for (int ky = 0; ky < KH; ky++)
+            for (int kx = 0; kx < KW; kx++) {
+              int iy = y * stride - pad + ky, ix = x * stride - pad + kx;
+              if (iy < 0 || iy >= H || ix < 0 || ix >= W) continue;
+              acc += (int32_t)k[((size_t)cb * KK + ky * KW + kx) * 256 + l * 17] *
+                     in[(((size_t)cb * H + iy) * W + ix) * 16 + l];
+            }
+          int32_t v = acc >> sh[c];
+          o[(((size_t)cb * out_h + y) * out_w + x) * 16 + l] = (int8_t)(v < lo ? lo : v > hi ? hi : v);
+        }
+  VTABufferFlush(output, 0, no);
+  return 0;
+}
+
 int convolution_wo_tr(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                       int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
   return convolution_wo_tr_impl(input, kernel, bias, output, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu,

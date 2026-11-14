@@ -3706,6 +3706,33 @@ int convolution_wo_tr_pool(int8_t* input, int8_t *kernel, int32_t *bias, int8_t 
   return rc;
 }
 
+//#### JO added (2026-11-14): convolution_wo_tr_res without relu (no requantize in this vtalib): the plain conv
+//#### into a scratch buffer, then round((c << convShl) + (r << resShl)) >> sumShr) half away from zero, clipped (= elemadd)
+static int convResidualCpuAdd(int8_t *input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C,
+                              int KN, int KH, int KW, int pad_size, int stride_size, bool doRelu, bool doBias,
+                              uint8_t shift, int out_h, int out_w, int8_t *residual, int convShl, int resShl,
+                              int sumShr, void *vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize,
+                              uint32_t idEVTA) {
+  size_t n = (size_t)out_h * out_w * KN;
+  void *tmp = VTABufferAlloc(n);
+  int rc = convolution_wo_tr_impl(input, kernel, bias, (int8_t *)tmp, N, H, W, C, KN, KH, KW, pad_size, stride_size,
+                                  doRelu, doBias, shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize,
+                                  idEVTA, nullptr);
+  VTABufferInvalidate(tmp, 0, n);
+  VTABufferInvalidate(residual, 0, n);
+  const int8_t *c = (const int8_t *)VTABufferGetVirtAddr(tmp), *r = (const int8_t *)VTABufferGetVirtAddr(residual);
+  int8_t *o = (int8_t *)VTABufferGetVirtAddr(output);
+  const int32_t h = sumShr ? 1 << (sumShr - 1) : 0;
+  for (size_t i = 0; i < n; i++) {
+    int32_t v = ((int32_t)c[i] << convShl) + ((int32_t)r[i] << resShl);
+    v = (v + h - (v < 0 && sumShr ? 1 : 0)) >> sumShr;
+    o[i] = (int8_t)(v > 127 ? 127 : (v < -128 ? -128 : v));
+  }
+  VTABufferFlush(output, 0, n);
+  VTABufferFree(tmp);
+  return rc;
+}
+
 int convolution_wo_tr_res(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                           int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w,
                           int8_t *residual, int convShl, int resShl, int sumShr, int sumRelu,
@@ -3719,6 +3746,12 @@ int convolution_wo_tr_res(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *
   }
   ConvResidual res = {residual, getIdentityWeights(idEVTA), (uint32_t)resShl, (uint32_t)convShl, (uint32_t)sumShr,
                       sumRelu > 0, sumRelu > 1 ? (uint32_t)sumRelu - 1 : 0};
+  //#### JO added (2026-11-14): no relu (VTASave -vta-fuse-residual-norelu): the ALU rounds the sum half up, the CPU
+  //#### elemadd half away from zero (they differ at negative halves): the plain conv, then the add on the CPU
+  if (!sumRelu)
+    return convResidualCpuAdd(input, kernel, bias, output, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu,
+                              doBias, shift, out_h, out_w, residual, convShl, resShl, sumShr, vtaCmdH, nVirtualThread,
+                              tileHSize, tileWSize, idEVTA);
   //#### EVTA_RES_CHECK=1: also run the plain conv into a scratch buffer and the CPU elemadd + relu on it
   //#### (std::round as CPUBundle elemadd), compare with the fused output and print the mismatches
   static int check = -1;

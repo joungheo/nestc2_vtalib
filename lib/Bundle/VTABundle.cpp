@@ -3277,8 +3277,94 @@ int dw_convolution_evta(int8_t *input, void *kernel, void *bias, void *shift, in
   return 0;
 }
 
+//#### JO added (2026-11-14): conv epilogue (VTASetConvEpilogue, docs/evta_alux_epilogue.md; the same API as
+//#### vtalib-zcu102-systolic, which runs any program it can on the EVTA): here the residual form ADD, RQ (round 2 or shift 0,
+//#### -128..127)[, CLIP 0..127[, SHL q, CLIP -128..127]] is convolution_wo_tr_res, anything else the plain conv + the
+//#### program on the CPU (VTAEpilogueRef)
+thread_local const VTAEpilogue *gConvEpi = nullptr;
+void VTASetConvEpilogue(const VTAEpilogue *e) { gConvEpi = e; }
+static int32_t epiRq(int32_t v, int rnd, int shift, int lo, int hi) {
+  uint32_t h = (rnd != 0 && shift != 0) ? (uint32_t)1 << (shift - 1) : 0;
+  if (rnd == 2 && shift != 0 && v < 0)
+    h -= 1;
+  const int32_t q = (int32_t)((uint32_t)v + h) >> shift;
+  return q < lo ? lo : q > hi ? hi : q;
+}
+int8_t VTAEpilogueRef(const VTAEpilogue *E, int8_t x, const int8_t *tv) {
+  int32_t v = x;
+  for (int i = 0; i < E->n; i++) {
+    const VTAEpiStep &s = E->s[i];
+    switch (s.op) {
+    case VTA_EPI_ADD: v = (int32_t)(((uint32_t)v << s.b) + ((uint32_t)(int32_t)tv[s.a] << s.c)); break;
+    case VTA_EPI_RQ: v = epiRq(v, s.a, s.b, s.c, s.d); break;
+    case VTA_EPI_CLIP: v = v < s.a ? s.a : v > s.b ? s.b : v; break;
+    case VTA_EPI_SHL: v = (int32_t)((uint32_t)v << s.a); break;
+    case VTA_EPI_LUT: v = E->lut[s.a][(uint8_t)v]; break;
+    default: break;
+    }
+  }
+  return (int8_t)(v < -128 ? -128 : v > 127 ? 127 : v);
+}
+int convolution_wo_tr_res(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
+                          int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w,
+                          int8_t *residual, int convShl, int resShl, int sumShr, int sumRelu,
+                          void* vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA);
+// the arguments of convolution_wo_tr_res for E, or false
+static bool epiAsResidual(const VTAEpilogue &E, int *convShl, int *resShl, int *sumShr, int *sumRelu) {
+  const VTAEpiStep *s = E.s;
+  if (E.n < 2 || s[0].op != VTA_EPI_ADD || s[0].a != 0 || !E.t[0] || s[1].op != VTA_EPI_RQ ||
+      (s[1].a != 2 && s[1].b != 0) || s[1].c != -128 || s[1].d != 127)
+    return false;
+  *convShl = s[0].b, *resShl = s[0].c, *sumShr = s[1].b, *sumRelu = 0;
+  if (E.n == 2)
+    return true;
+  if (s[2].op != VTA_EPI_CLIP || s[2].a != 0 || s[2].b != 127)
+    return false;
+  *sumRelu = 1;
+  if (E.n == 3)
+    return true;
+  if (E.n != 5 || s[3].op != VTA_EPI_SHL || s[3].a < 1 || s[3].a > 7 || s[4].op != VTA_EPI_CLIP || s[4].a != -128 ||
+      s[4].b != 127)
+    return false;
+  *sumRelu = 1 + s[3].a;
+  return true;
+}
+
 int convolution_wo_tr(int8_t* input, int8_t *kernel, int32_t *bias, int8_t *output, int N, int H, int W, int C, int KN, int KH, int KW, int pad_size,
                       int stride_size, bool doRelu, bool doBias, uint8_t shift, int out_h, int out_w, void* vtaCmdH, int nVirtualThread, int tileHSize, int tileWSize, uint32_t idEVTA) {
+  //#### JO added (2026-11-14): the epilogue (VTASetConvEpilogue)
+  if (gConvEpi) {
+    const VTAEpilogue &E = *gConvEpi;
+    int cs, rs, ss, sr;
+    if (epiAsResidual(E, &cs, &rs, &ss, &sr))
+      return convolution_wo_tr_res(input, kernel, bias, output, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu,
+                                   doBias, shift, out_h, out_w, (int8_t *)E.t[0], cs, rs, ss, sr, vtaCmdH,
+                                   nVirtualThread, tileHSize, tileWSize, idEVTA);
+    const size_t n = (size_t)N * KN * out_h * out_w;
+    int nt = 0;
+    for (int i = 0; i < E.n; i++)
+      if (E.s[i].op == VTA_EPI_ADD) nt = std::max(nt, E.s[i].a + 1);
+    void *tmp = nt ? VTABufferAlloc(n) : (void *)output;
+    int rc = convolution_wo_tr_impl(input, kernel, bias, (int8_t *)tmp, N, H, W, C, KN, KH, KW, pad_size, stride_size,
+                                    doRelu, doBias, shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize,
+                                    idEVTA, nullptr);
+    VTABufferInvalidate(tmp, 0, n);
+    const int8_t *t[2] = {nullptr, nullptr};
+    for (int k = 0; k < nt; k++) {
+      VTABufferInvalidate(E.t[k], 0, n);
+      t[k] = (const int8_t *)VTABufferGetVirtAddr(E.t[k]);
+    }
+    const int8_t *c = (const int8_t *)VTABufferGetVirtAddr(tmp);
+    int8_t *o = (int8_t *)VTABufferGetVirtAddr(output);
+    int8_t tv[2] = {0, 0};
+    for (size_t i = 0; i < n; i++) {
+      for (int k = 0; k < nt; k++) tv[k] = t[k][i];
+      o[i] = VTAEpilogueRef(&E, c[i], tv);
+    }
+    VTABufferFlush(output, 0, n);
+    if (tmp != output) VTABufferFree(tmp);
+    return rc;
+  }
   return convolution_wo_tr_impl(input, kernel, bias, output, N, H, W, C, KN, KH, KW, pad_size, stride_size, doRelu,
                                 doBias, shift, out_h, out_w, vtaCmdH, nVirtualThread, tileHSize, tileWSize, idEVTA,
                                 nullptr);

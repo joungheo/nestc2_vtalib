@@ -189,6 +189,30 @@ void preprocess_conv0pack_rows(const float *input, int8_t *output, int N, int H,
 //#### runs (VTABundle.cpp InputStream); vta/vtalib writes them at once.
 //#### JO added (2026-11-06): upper clip of the relu of the following convs (ReLU6: round(6 / output scale)), 127 = plain relu
 void VTASetActivationClip(int hi);
+//#### JO added (2026-11-14): conv epilogue (docs/evta_alux_epilogue.md): steps applied in order to every output value v of the
+//#### next convolution_wo_tr calls, after the conv's own requantize (v starts as its int8 output); VTASetConvEpilogue(nullptr)
+//#### turns it off. The EVTA does what it can on the loaded bitstream (ALU / GEMM passes per tile before the STORE), the rest
+//#### is done on the CPU with the same arithmetic (VTAEpilogueRef). Every value ends as int8.
+//#### This vtalib (HLS GEMM bitstreams) runs the residual + relu form on the EVTA (convolution_wo_tr_res), the rest on the CPU.
+//####   ADD  a = tensor index, b, c:   v = (v << b) + (t_a << c)    t_a: VTA buffer in the EVTA layout of the conv output
+//####   RQ   a = round, b = shift, c = lo, d = hi:  v = clip((v + r) >> b, c, d), r = 0 (round 0), 2^(b-1) (1),
+//####        2^(b-1) - (v < 0) (2, half away from zero)
+//####   CLIP a = lo, b = hi;   SHL a = k: v = v << k;   LUT a = table index: v = lut_a[(uint8_t) v]
+#define VTA_CONV_EPILOGUE 1
+enum { VTA_EPI_ADD = 1, VTA_EPI_RQ = 2, VTA_EPI_CLIP = 3, VTA_EPI_SHL = 4, VTA_EPI_LUT = 5 };
+#define VTA_EPI_MAX_STEPS 8
+struct VTAEpiStep {
+  int32_t op, a, b, c, d;
+};
+struct VTAEpilogue {
+  int32_t n;
+  VTAEpiStep s[VTA_EPI_MAX_STEPS];
+  void *t[2];           // ADD tensors
+  const int8_t *lut[2]; // LUT tables, indexed by the byte
+};
+void VTASetConvEpilogue(const VTAEpilogue *e);
+// the value of one output on the CPU: x = the conv's int8 output, tv[i] = tensor i's value at the same place
+int8_t VTAEpilogueRef(const VTAEpilogue *e, int8_t x, const int8_t *tv);
 void preprocess_conv0pack_stream(const float *input, void *buf, int N, int H, int W, int C, int nchw, float scale,
                                  int32_t offset, const int8_t *lut, int KH, int KW, int stride, int pad, int CO,
                                  int padEnd = -1);
